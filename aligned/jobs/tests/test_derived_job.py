@@ -6,7 +6,7 @@ import polars as pl
 import pytest
 
 from aligned.lazy_imports import pandas as pd
-from aligned import feature_view, Float, String, FileSource
+from aligned import feature_view, Float32, String, FileSource
 from aligned.compiler.model import model_contract
 from aligned.feature_store import ContractStore
 from aligned.local.job import FileFullJob
@@ -75,7 +75,7 @@ class Transaction:
 
     user_id = String().fill_na('some_user_id')
 
-    amount = Float()
+    amount = Float32()
     abs_amount = abs(amount)
 
     is_expence = amount < 0
@@ -152,7 +152,7 @@ def test_with_schema() -> None:
             other_id=String(),
         ),
         additional_features=dict(  # noqa: C408
-            other=Float(),
+            other=Float32(),
         ),
     )
     transaction = Transaction.compile()
@@ -225,11 +225,13 @@ async def test_model_with_label_multiple_views() -> None:
             'amount': [-20.0, -100.0, -20.0, -100.0],
         }
     )
+    expected_df['total_amount'] = expected_df['total_amount'].astype('float32')
+    expected_df['abs_amount'] = expected_df['abs_amount'].astype('float32')
+    expected_df['amount'] = expected_df['amount'].astype('float32')
 
     assert data.labels.shape[0] != 0
     assert data.input.shape[1] == 3
     assert data.input.shape[0] != 0
 
-    assert data.data.sort_values(['user_id', 'transaction_id'])[expected_df.columns].equals(
-        expected_df.sort_values(['user_id', 'transaction_id'])
-    )
+    result = data.data.sort_values(['user_id', 'transaction_id'])[expected_df.columns]
+    assert result.equals(expected_df.sort_values(['user_id', 'transaction_id']))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from io import StringIO
-from aligned.schemas.date_formatter import DateFormatter
+from aligned.config_value import PathResolver
+from aligned.schemas.date_formatter import DateFormatter, TimeUnit
 
 from pytz import timezone
 import asyncio
@@ -14,9 +15,6 @@ from typing import TYPE_CHECKING, Callable, Collection, Literal, Union, TypeVar,
 
 import polars as pl
 from aligned.lazy_imports import pandas as pd
-
-from polars.type_aliases import TimeUnit
-from prometheus_client import Histogram
 
 from aligned.exceptions import UnableToFindFileException
 
@@ -32,6 +30,7 @@ if TYPE_CHECKING:
     from aligned.sources.local import Directory
     from aligned.schemas.folder import DatasetMetadata, DatasetStore
     from aligned.feature_source import WritableFeatureSource
+    from aligned.exposed_model.interface import ExposedModel
 
     from aligned.schemas.derivied_feature import AggregatedFeature, AggregateOver
     from aligned.schemas.model import EventTrigger, Model
@@ -64,20 +63,46 @@ def split(
 
 
 def subset_polars(
-    data: pl.DataFrame, start_ratio: float, end_ratio: float, event_timestamp_column: str | None = None
+    data: pl.DataFrame,
+    start_ratio: float,
+    end_ratio: float,
+    event_timestamp_column: str | None = None,
+    strategies_on: list[str] | None = None,
 ) -> pl.DataFrame:
 
     if event_timestamp_column:
         data = data.sort(event_timestamp_column)
 
-    group_size = data.height
-    start_index = round(group_size * start_ratio)
-    end_index = round(group_size * end_ratio)
+    if strategies_on is None:
+        strategies_on = []
 
-    if end_index >= group_size:
-        return data[start_index:]
+    if not strategies_on:
+        datasets: list[pl.DataFrame] = [data]
     else:
-        return data[start_index:end_index]
+        datasets: list[pl.DataFrame] = []
+
+        for cats in data.select(strategies_on).unique(strategies_on).rows(named=True):
+            datasets.append(data.filter(*[pl.col(key) == val for key, val in cats.items()]))
+
+    ret_dataset: pl.DataFrame | None = None
+
+    for dataset in datasets:
+        group_size = dataset.height
+        start_index = round(group_size * start_ratio)
+        end_index = round(group_size * end_ratio)
+
+        if end_index >= group_size:
+            subset = dataset[start_index:]
+        else:
+            subset = dataset[start_index:end_index]
+
+        if ret_dataset is None:
+            ret_dataset = subset
+        else:
+            ret_dataset = ret_dataset.vstack(subset)
+
+    assert ret_dataset is not None
+    return ret_dataset
 
 
 def fraction_from_job(job: RetrivalJob) -> float | None:
@@ -103,6 +128,12 @@ class TrainTestJob:
     @property
     def test(self) -> SupervisedJob:
         return SupervisedJob(self.test_job, self.target_columns)
+
+    @property
+    def input_features(self) -> list[Feature]:
+        return [
+            feat for feat in self.train_job.request_result.features if feat.name not in self.target_columns
+        ]
 
     async def store_dataset_at_directory(
         self,
@@ -226,6 +257,11 @@ class TrainTestValidateJob:
     @property
     def validate(self) -> SupervisedJob:
         return SupervisedJob(self.validate_job, self.target_columns, self.should_filter_out_null_targets)
+
+    def input_features(self) -> list[Feature]:
+        return [
+            feat for feat in self.train_job.request_result.features if feat.name not in self.target_columns
+        ]
 
     async def store_dataset_at_directory(
         self,
@@ -411,13 +447,27 @@ class SupervisedJob:
     def request_result(self) -> RequestResult:
         return self.job.request_result
 
+    @property
+    def input_features(self) -> list[Feature]:
+        return [feat for feat in self.job.request_result.features if feat.name not in self.target_columns]
+
     def train_test(
-        self, train_size: float, splitter_factory: Callable[[SplitConfig], SplitterCallable] | None = None
+        self,
+        train_size: float,
+        splitter_factory: Callable[[SplitConfig], SplitterCallable] | None = None,
     ) -> TrainTestJob:
+
+        if len(self.target_columns) == 1:
+            return self.job.train_test(
+                train_size=train_size,
+                target_column=next(iter(self.target_columns)),
+                splitter_factory=splitter_factory,
+            )
 
         cached_job = InMemoryCacheJob(self.job)
 
-        event_timestamp = self.job.request_result.event_timestamp
+        result = self.job.request_result
+        event_timestamp = result.event_timestamp
 
         train_config = SplitConfig(
             left_size=train_size,
@@ -429,11 +479,16 @@ class SupervisedJob:
         if splitter_factory:
             train_splitter = splitter_factory(train_config)  # type: ignore
         else:
+            strategies_on = [
+                feat.name
+                for feat in result.features.union(result.entities)
+                if feat.name in self.target_columns and feat.dtype.is_categorical_representable
+            ]
 
             def train_splitter(df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
                 return (
-                    subset_polars(df, 0, train_config.left_size, event_timestamp),
-                    subset_polars(df, train_config.left_size, 1, event_timestamp),
+                    subset_polars(df, 0, train_config.left_size, event_timestamp, strategies_on),
+                    subset_polars(df, train_config.left_size, 1, event_timestamp, strategies_on),
                 )
 
         train_job, test_job = cached_job.split(train_splitter, (train_size, 1 - train_size))
@@ -450,11 +505,21 @@ class SupervisedJob:
         splitter_factory: Callable[[SplitConfig], SplitterCallable] | None = None,
     ) -> TrainTestValidateJob:
 
+        if len(self.target_columns) == 1:
+            return self.job.train_test_validate(
+                train_size=train_size,
+                validate_size=validate_size,
+                target_column=next(iter(self.target_columns)),
+                splitter_factory=splitter_factory,
+                should_filter_out_null_targets=self.should_filter_out_null_targets,
+            )
+
         job_to_cache = self.job
         if self.should_filter_out_null_targets:
             job_to_cache = self.job.polars_method(lambda df: df.drop_nulls(self.target_columns))
 
-        event_timestamp = self.job.request_result.event_timestamp
+        result = self.job.request_result
+        event_timestamp = result.event_timestamp
 
         leftover_size = 1 - train_size
 
@@ -475,17 +540,22 @@ class SupervisedJob:
             train_splitter = splitter_factory(train_config)  # type: ignore
             validate_splitter = splitter_factory(test_config)  # type: ignore
         else:
+            strategies_on = [
+                feat.name
+                for feat in result.features.union(result.entities)
+                if feat.name in self.target_columns and feat.dtype.is_categorical_representable
+            ]
 
             def train_splitter(df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
                 return (
-                    subset_polars(df, 0, train_config.left_size, event_timestamp),
-                    subset_polars(df, train_config.left_size, 1, event_timestamp),
+                    subset_polars(df, 0, train_config.left_size, event_timestamp, strategies_on),
+                    subset_polars(df, train_config.left_size, 1, event_timestamp, strategies_on),
                 )
 
             def validate_splitter(df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
                 return (
-                    subset_polars(df, 0, test_config.left_size, event_timestamp),
-                    subset_polars(df, test_config.left_size, 1, event_timestamp),
+                    subset_polars(df, 0, test_config.left_size, event_timestamp, strategies_on),
+                    subset_polars(df, test_config.left_size, 1, event_timestamp, strategies_on),
                 )
 
         train_job, rem_job = job_to_cache.split(train_splitter, (train_size, 1 - train_size))
@@ -696,36 +766,122 @@ class RetrivalJob(ABC):
         if isinstance(location, str):
             from aligned.sources.local import ParquetFileSource
 
-            return FileCachedJob(ParquetFileSource(location), self).derive_features()
+            return FileCachedJob(ParquetFileSource(PathResolver.from_value(location)), self).derive_features()
         else:
             return FileCachedJob(location, self).derive_features()
 
-    def train_test(self, train_size: float, target_column: str) -> TrainTestJob:
-        cached = InMemoryCacheJob(self)
+    def train_test(
+        self,
+        train_size: float,
+        target_column: str,
+        splitter_factory: Callable[[SplitConfig], SplitterCallable] | None = None,
+    ) -> TrainTestJob:
+        cached_job = InMemoryCacheJob(self)
 
-        event_timestamp = self.request_result.event_timestamp
+        result = self.request_result
+        event_timestamp = result.event_timestamp
 
+        train_config = SplitConfig(
+            left_size=train_size,
+            right_size=1 - train_size,
+            event_timestamp_column=event_timestamp,
+            target_columns=[target_column],
+        )
+
+        if splitter_factory:
+            train_splitter = splitter_factory(train_config)  # type: ignore
+        else:
+            strategies_on = [
+                next(
+                    iter(
+                        feat.name
+                        for feat in result.features.union(result.entities)
+                        if feat.name == target_column and feat.dtype.is_categorical_representable
+                    )
+                )
+            ]
+
+            def train_splitter(df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+                return (
+                    subset_polars(df, 0, train_config.left_size, event_timestamp, strategies_on),
+                    subset_polars(df, train_config.left_size, 1, event_timestamp, strategies_on),
+                )
+
+        train_job, test_job = cached_job.split(train_splitter, (train_size, 1 - train_size))
         return TrainTestJob(
-            train_job=SubsetJob(cached, 0, train_size, event_timestamp),
-            test_job=SubsetJob(cached, train_size, 1, event_timestamp),
+            train_job=train_job,
+            test_job=test_job,
             target_columns={target_column},
         )
 
     def train_test_validate(
-        self, train_size: float, validate_size: float, target_column: str
+        self,
+        train_size: float,
+        validate_size: float,
+        target_column: str,
+        splitter_factory: Callable[[SplitConfig], SplitterCallable] | None = None,
+        should_filter_out_null_targets: bool = True,
     ) -> TrainTestValidateJob:
 
-        cached = InMemoryCacheJob(self)
+        job_to_cache = self
+        if should_filter_out_null_targets:
+            job_to_cache = job_to_cache.polars_method(lambda df: df.drop_nulls(target_column))
 
-        event_timestamp = self.request_result.event_timestamp
+        result = self.request_result
+        event_timestamp = result.event_timestamp
 
-        validate_ratio_start = train_size + validate_size
+        leftover_size = 1 - train_size
+
+        train_config = SplitConfig(
+            left_size=train_size,
+            right_size=leftover_size,
+            event_timestamp_column=event_timestamp,
+            target_columns=[target_column],
+        )
+        test_config = SplitConfig(
+            left_size=(leftover_size - validate_size) / leftover_size,
+            right_size=validate_size / leftover_size,
+            event_timestamp_column=event_timestamp,
+            target_columns=[target_column],
+        )
+
+        if splitter_factory:
+            train_splitter = splitter_factory(train_config)  # type: ignore
+            validate_splitter = splitter_factory(test_config)  # type: ignore
+        else:
+            strategies_on = [
+                next(
+                    iter(
+                        feat.name
+                        for feat in result.features.union(result.entities)
+                        if feat.name == target_column and feat.dtype.is_categorical_representable
+                    )
+                )
+            ]
+
+            def train_splitter(df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+                return (
+                    subset_polars(df, 0, train_config.left_size, event_timestamp, strategies_on),
+                    subset_polars(df, train_config.left_size, 1, event_timestamp, strategies_on),
+                )
+
+            def validate_splitter(df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+                return (
+                    subset_polars(df, 0, test_config.left_size, event_timestamp, strategies_on),
+                    subset_polars(df, test_config.left_size, 1, event_timestamp, strategies_on),
+                )
+
+        train_job, rem_job = job_to_cache.split(train_splitter, (train_size, 1 - train_size))
+        test_job, validate_job = rem_job.split(
+            validate_splitter, (1 - train_size - validate_size, validate_size)
+        )
 
         return TrainTestValidateJob(
-            train_job=SubsetJob(cached, 0, train_size, event_timestamp),
-            test_job=SubsetJob(cached, train_size, validate_ratio_start, event_timestamp),
-            validate_job=SubsetJob(cached, validate_ratio_start, 1, event_timestamp),
+            train_job=train_job,
+            test_job=test_job,
+            validate_job=validate_job,
             target_columns={target_column},
+            should_filter_out_null_targets=should_filter_out_null_targets,
         )
 
     def drop_invalid(self, validator: Validator | None = None) -> RetrivalJob:
@@ -762,8 +918,8 @@ class RetrivalJob(ABC):
             return self.copy_with(self.job.drop_invalid(validator))
         return DropInvalidJob(self, validator or PolarsValidator())
 
-    def monitor_time_used(self, time_metric: Histogram, labels: list[str] | None = None) -> RetrivalJob:
-        return TimeMetricLoggerJob(self, time_metric, labels)
+    def monitor_time_used(self, callback: Callable[[float], None]) -> RetrivalJob:
+        return TimeMetricLoggerJob(self, callback=callback)
 
     def derive_features(self, requests: list[RetrivalRequest] | None = None) -> RetrivalJob:
         requests = requests or self.retrival_requests
@@ -809,8 +965,10 @@ class RetrivalJob(ABC):
     def validate_entites(self) -> RetrivalJob:
         return ValidateEntitiesJob(self)
 
-    def unique_on(self, unique_on: list[str], sort_key: str | None = None) -> RetrivalJob:
-        return UniqueRowsJob(job=self, unique_on=unique_on, sort_key=sort_key)
+    def unique_on(
+        self, unique_on: list[str], sort_key: str | None = None, descending: bool = True
+    ) -> RetrivalJob:
+        return UniqueRowsJob(job=self, unique_on=unique_on, sort_key=sort_key, descending=descending)
 
     def unique_entities(self) -> RetrivalJob:
         request = self.request_result
@@ -852,10 +1010,10 @@ class RetrivalJob(ABC):
         return LiteralDictJob(data, request)
 
     @staticmethod
-    def from_polars_df(df: pl.DataFrame, request: list[RetrivalRequest]) -> RetrivalJob:
+    def from_polars_df(df: pl.DataFrame | pl.LazyFrame, request: list[RetrivalRequest]) -> RetrivalJob:
         from aligned.local.job import LiteralRetrivalJob
 
-        return LiteralRetrivalJob(df.lazy(), request)
+        return LiteralRetrivalJob(df, request)
 
     @staticmethod
     def from_lazy_function(
@@ -1466,8 +1624,8 @@ class JoinJobs(RetrivalJob):
 
             polars_type = polars_types[0].dtype.polars_type
 
-            left_column_dtypes = dict(zip(left.columns, left.dtypes))
-            right_column_dtypes = dict(zip(right.columns, right.dtypes))
+            left_column_dtypes = left.collect_schema()
+            right_column_dtypes = right.collect_schema()
 
             if not left_column_dtypes[left_col].is_(polars_type):
                 left = left.with_columns(pl.col(left_col).cast(polars_type))
@@ -1743,7 +1901,7 @@ class DropInvalidJob(RetrivalJob, ModificationJob):
         if isinstance(location, str):
             from aligned.sources.local import ParquetFileSource
 
-            return FileCachedJob(ParquetFileSource(location), self)
+            return FileCachedJob(ParquetFileSource(PathResolver.from_value(location)), self)
         else:
             return FileCachedJob(location, self)
 
@@ -1794,7 +1952,8 @@ class DerivedFeatureJob(RetrivalJob, ModificationJob):
         from aligned.feature_store import ContractStore
 
         for request in self.requests:
-            missing_features = request.features_to_include - set(df.columns)
+            df_columns = df.collect_schema().names()
+            missing_features = request.features_to_include - set(df_columns)
 
             if len(missing_features) == 0:
                 logger.debug('Skipping to compute derived features as they are already computed')
@@ -1805,7 +1964,7 @@ class DerivedFeatureJob(RetrivalJob, ModificationJob):
                 round_expressions: list[pl.Expr] = []
 
                 for feature in feature_round:
-                    if feature.transformation.should_skip(feature.name, df.columns):
+                    if feature.transformation.should_skip(feature.name, df_columns):
                         logger.debug(f'Skipped adding feature {feature.name} to computation plan')
                         continue
 
@@ -1816,6 +1975,7 @@ class DerivedFeatureJob(RetrivalJob, ModificationJob):
                     )
                     if isinstance(method, pl.LazyFrame):
                         df = method
+                        df_columns = df.collect_schema().names()
                     elif isinstance(method, pl.Expr):
                         round_expressions.append(method.alias(feature.name))
                     else:
@@ -1823,6 +1983,7 @@ class DerivedFeatureJob(RetrivalJob, ModificationJob):
 
                 if round_expressions:
                     df = df.with_columns(round_expressions)
+                    df_columns = df.collect_schema().names()
 
         return df
 
@@ -1877,6 +2038,7 @@ class UniqueRowsJob(RetrivalJob, ModificationJob):
     job: RetrivalJob
     unique_on: list[str]  # type: ignore
     sort_key: str | None = field(default=None)
+    descending: bool = field(default=True)
 
     async def to_pandas(self) -> pd.DataFrame:
         return (await self.to_lazy_polars()).collect().to_pandas()
@@ -1885,9 +2047,9 @@ class UniqueRowsJob(RetrivalJob, ModificationJob):
         data = await self.job.to_lazy_polars()
 
         if self.sort_key:
-            data = data.sort(self.sort_key, descending=True)
+            data = data.sort(self.sort_key, descending=self.descending)
 
-        return data.unique(self.unique_on, keep='first').lazy()
+        return data.unique(self.unique_on, keep='first', maintain_order=True)
 
 
 @dataclass
@@ -2255,18 +2417,13 @@ class TimeMetricLoggerJob(RetrivalJob, ModificationJob):
 
     job: RetrivalJob
 
-    time_metric: Histogram
-    labels: list[str] | None = field(default=None)
+    callback: Callable[[float], None]
 
     async def to_pandas(self) -> pd.DataFrame:
         start_time = timeit.default_timer()
         df = await self.job.to_pandas()
         elapsed = timeit.default_timer() - start_time
-        logger.debug(f'Computed records in {elapsed} seconds')
-        if self.labels:
-            self.time_metric.labels(*self.labels).observe(elapsed)
-        else:
-            self.time_metric.observe(elapsed)
+        self.callback(elapsed)
         return df
 
     async def to_lazy_polars(self) -> pl.LazyFrame:
@@ -2274,11 +2431,7 @@ class TimeMetricLoggerJob(RetrivalJob, ModificationJob):
         df = await self.job.to_lazy_polars()
         concrete = df.collect()
         elapsed = timeit.default_timer() - start_time
-        logger.debug(f'Computed records in {elapsed} seconds')
-        if self.labels:
-            self.time_metric.labels(*self.labels).observe(elapsed)
-        else:
-            self.time_metric.observe(elapsed)
+        self.callback(elapsed)
         return concrete.lazy()
 
 
@@ -2627,6 +2780,7 @@ class PredictionJob(RetrivalJob):
     job: RetrivalJob
     model: Model
     store: ContractStore
+    predictor: ExposedModel
     output_requests: list[RetrivalRequest]
 
     def added_features(self) -> set[Feature]:
@@ -2652,16 +2806,13 @@ class PredictionJob(RetrivalJob):
         )
 
     async def to_pandas(self) -> pd.DataFrame:
-        return await self.job.to_pandas()
+        return (await self.to_polars()).to_pandas()
 
     async def to_lazy_polars(self) -> pl.LazyFrame:
         from aligned.exposed_model.interface import VersionedModel
         from datetime import datetime, timezone
 
-        predictor = self.model.exposed_model
-        if not predictor:
-            raise ValueError('No predictor defined for model')
-
+        predictor = self.predictor
         output = self.model.predictions_view
         model_version_column = output.model_version_column
 
@@ -2685,10 +2836,25 @@ class PredictionJob(RetrivalJob):
         return df.lazy()
 
     def log_each_job(self, logger_func: Callable[[object], None] | None = None) -> RetrivalJob:
-        return PredictionJob(self.job.log_each_job(logger_func), self.model, self.store, self.output_requests)
+        return LogJob(
+            PredictionJob(
+                self.job.log_each_job(logger_func),
+                self.model,
+                self.store,
+                output_requests=self.output_requests,
+                predictor=self.predictor,
+            ),
+            logger_func or logger.debug,
+        )
 
     def filter(self, condition: str | Feature | DerivedFeature | pl.Expr) -> RetrivalJob:
-        return PredictionJob(self.job.filter(condition), self.model, self.store, self.output_requests)
+        return PredictionJob(
+            self.job.filter(condition),
+            self.model,
+            self.store,
+            output_requests=self.output_requests,
+            predictor=self.predictor,
+        )
 
     def remove_derived_features(self) -> RetrivalJob:
         return self.job.remove_derived_features()

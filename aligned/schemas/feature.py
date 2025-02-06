@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, TYPE_CHECKING
+from datetime import date, datetime
+import json
+from typing import Any, Literal, TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import polars as pl
@@ -19,6 +21,7 @@ class StaticFeatureTags:
     is_model_version = 'is_model_version'
     is_entity = 'is_entity'
     is_annotated_by = 'is_annotated_by'
+    is_annotated_feature = 'is_annotated_feature'
     is_input_features = 'is_input_features'
     is_freshness = 'is_updated_at_feature'
 
@@ -33,8 +36,9 @@ NAME_POLARS_MAPPING = [
     ('uint16', pl.UInt16),
     ('uint32', pl.UInt32),
     ('uint64', pl.UInt64),
-    ('float', pl.Float64),
     ('float', pl.Float32),
+    ('float32', pl.Float32),
+    ('float64', pl.Float64),
     ('double', pl.Float64),
     ('bool', pl.Boolean),
     ('date', pl.Date),
@@ -55,6 +59,12 @@ class FeatureType(Codable):
     name: str
 
     @property
+    def is_categorical_representable(self) -> bool:
+        if 'int' in self.name:
+            return True
+        return self.name in ['string', 'bool']
+
+    @property
     def is_numeric(self) -> bool:
         return self.name in {
             'bool',
@@ -67,6 +77,8 @@ class FeatureType(Codable):
             'uint32',
             'uint64',
             'float',
+            'float32',
+            'float64',
             'double',
         }  # Can be represented as an int
 
@@ -77,6 +89,18 @@ class FeatureType(Codable):
     @property
     def is_array(self) -> bool:
         return self.name.startswith('array')
+
+    @property
+    def is_struct(self) -> bool:
+        return self.name.startswith('struct')
+
+    def struct_fields(self) -> dict[str, FeatureType]:
+        raw_content = self.name.removeprefix('struct-')
+        content = json.loads(raw_content)
+
+        assert isinstance(content, dict)
+
+        return {key: FeatureType(value) for key, value in content.items()}
 
     def array_subtype(self) -> FeatureType | None:
         if not self.is_array or '-' not in self.name:
@@ -106,6 +130,8 @@ class FeatureType(Codable):
             'int32': int,
             'int64': int,
             'float': float,
+            'float32': float,
+            'float64': double,
             'double': double,
             'bool': bool,
             'date': date,
@@ -129,6 +155,8 @@ class FeatureType(Codable):
             'int32': 'Int32',
             'int64': 'Int64',
             'float': np.float32,
+            'float32': np.float32,
+            'float64': np.float64,
             'double': np.float64,
             'bool': 'boolean',
             'date': np.datetime64,
@@ -177,8 +205,8 @@ class FeatureType(Codable):
 
         if self.is_embedding:
             embedding_size = self.embedding_size()
-            assert embedding_size, 'Missing embedding size'
-            return ff.Embedding(embedding_size=embedding_size)
+            if embedding_size:
+                return ff.Embedding(embedding_size=embedding_size)
 
         return {
             'string': ff.String(),
@@ -190,8 +218,10 @@ class FeatureType(Codable):
             'uint16': ff.UInt16(),
             'uint32': ff.UInt32(),
             'uint64': ff.UInt64(),
-            'float': ff.Float(),
-            'double': ff.Float(),
+            'float': ff.Float32(),
+            'float32': ff.Float32(),
+            'float64': ff.Float64(),
+            'double': ff.Float64(),
             'bool': ff.Bool(),
             'date': ff.Timestamp(),
             'datetime': ff.Timestamp(),
@@ -242,6 +272,61 @@ class FeatureType(Codable):
         raise ValueError(f'Unable to find a value that can represent {polars_type}')
 
     @staticmethod
+    def from_type(dtype: Any) -> FeatureType | None:
+        from pydantic import BaseModel
+        from aligned.feature_view.feature_view import FeatureViewWrapper
+        from dataclasses import fields, is_dataclass
+        from typing import get_origin, get_args
+        from inspect import getmro
+
+        if dtype in [str, 'str']:
+            return FeatureType.string()
+        elif dtype in [int, 'int']:
+            return FeatureType.int64()
+        elif dtype in [float, 'float']:
+            return FeatureType.floating_point()
+        elif dtype in [date, 'date']:
+            return FeatureType.date()
+        elif dtype in [datetime, 'datetime']:
+            return FeatureType.datetime()
+        elif dtype in [bool, 'bool']:
+            return FeatureType.boolean()
+        elif get_origin(dtype) is list:
+            args = get_args(dtype)
+            if args:
+                return FeatureType.array(FeatureType.from_type(args[0]))
+            else:
+                return FeatureType.array()
+
+        if isinstance(dtype, list) and dtype and isinstance(dtype[0], Feature):
+            all_fields = {}
+            for field in dtype:
+                all_fields[field.name] = field.dtype
+            return FeatureType.struct(all_fields)
+
+        # Needs to be before is_dataclass
+        if isinstance(dtype, FeatureViewWrapper):
+            all_fields = {}
+            for field in dtype.query().request.all_returned_features:
+                all_fields[field.name] = field.dtype
+            return FeatureType.struct(all_fields)
+
+        if is_dataclass(dtype):
+            all_fields = {}
+            for field in fields(dtype):
+                all_fields[field.name] = FeatureType.from_type(field.type)
+
+            return FeatureType.struct(all_fields)
+
+        if BaseModel in getmro(dtype):
+            all_fields = {}
+            for name, field in dtype.model_fields.items():
+                all_fields[name] = FeatureType.from_type(field.annotation)
+            return FeatureType.struct(all_fields)
+
+        return None
+
+    @staticmethod
     def string() -> FeatureType:
         return FeatureType(name='string')
 
@@ -282,6 +367,14 @@ class FeatureType(Codable):
         return FeatureType(name='int64')
 
     @staticmethod
+    def float64() -> FeatureType:
+        return FeatureType(name='float64')
+
+    @staticmethod
+    def float32() -> FeatureType:
+        return FeatureType(name='float32')
+
+    @staticmethod
     def floating_point() -> FeatureType:
         return FeatureType(name='float')
 
@@ -306,6 +399,11 @@ class FeatureType(Codable):
     @staticmethod
     def json() -> FeatureType:
         return FeatureType(name='json')
+
+    @staticmethod
+    def struct(subtypes: dict[str, FeatureType]) -> FeatureType:
+        content = json.dumps({key: value.name for key, value in subtypes.items()})
+        return FeatureType(name=f'struct-{content}')
 
     @staticmethod
     def array(sub_type: FeatureType | None = None) -> FeatureType:
@@ -360,11 +458,7 @@ class Feature(Codable):
         )
 
     def as_reference(self, location: FeatureLocation) -> FeatureReference:
-        return FeatureReference(
-            name=self.name,
-            location=location,
-            dtype=self.dtype,
-        )
+        return FeatureReference(name=self.name, location=location)
 
     def __hash__(self) -> int:
         return hash(self.name)
@@ -445,13 +539,11 @@ class FeatureLocation(Codable):
 class FeatureReference(Codable):
     name: str
     location: FeatureLocation
-    dtype: FeatureType
-    # is_derived: bool
 
     def as_feature(self) -> Feature:
         return Feature(
             name=self.name,
-            dtype=self.dtype,
+            dtype=FeatureType.string(),
             description=None,
             tags=None,
             constraints=None,
@@ -466,3 +558,18 @@ class FeatureReference(Codable):
 
     def feature_reference(self) -> FeatureReference:
         return self
+
+    @staticmethod
+    def from_string(value: str) -> FeatureReference | None:
+        if ':' not in value:
+            return None
+
+        splits = value.split(':')
+        if len(splits) != 3:
+            return None
+
+        loc = FeatureLocation.from_string(':'.join(splits[0:2]))
+        if loc is None:
+            return None
+
+        return FeatureReference(name=splits[-1], location=loc)

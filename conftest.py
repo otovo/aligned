@@ -9,7 +9,7 @@ from aligned import (
     Bool,
     EventTimestamp,
     FileSource,
-    Float,
+    Float32,
     Int32,
     Int64,
     RedisConfig,
@@ -74,12 +74,10 @@ def retrival_request_with_derived() -> RetrivalRequest:
                     FeatureReference(
                         name='c',
                         location=FeatureLocation.feature_view('test_with_ts'),
-                        dtype=FeatureType.int32(),
                     ),
                     FeatureReference(
                         name='d',
                         location=FeatureLocation.feature_view('test_with_ts'),
-                        dtype=FeatureType.int32(),
                     ),
                 },
                 transformation=Addition(front='c', behind='d'),
@@ -131,11 +129,8 @@ def combined_retrival_request() -> RetrivalRequest:
                     FeatureReference(
                         name='c+d',
                         location=FeatureLocation.feature_view('test_with_ts'),
-                        dtype=FeatureType.int32(),
                     ),
-                    FeatureReference(
-                        name='a', location=FeatureLocation.feature_view('test'), dtype=FeatureType.int32()
-                    ),
+                    FeatureReference(name='a', location=FeatureLocation.feature_view('test')),
                 },
                 transformation=Addition(front='c+d', behind='a'),
                 depth=2,
@@ -162,45 +157,45 @@ def breast_scan_feature_viewout_with_datetime(scan_without_datetime: CsvFileSour
         diagnosis = String().description('The given diagnose. M for malignant, and B for benigne')
         is_malignant = (diagnosis == 'M').description('If the scanned cells was diagnosed as dangerous')
 
-        radius_mean = Float()
-        radius_se = Float()
-        radius_worst = Float()
+        radius_mean = Float32()
+        radius_se = Float32()
+        radius_worst = Float32()
 
-        texture_mean = Float()
-        texture_se = Float()
-        texture_worst = Float()
+        texture_mean = Float32()
+        texture_se = Float32()
+        texture_worst = Float32()
 
-        perimeter_mean = Float()
-        perimeter_se = Float()
-        perimeter_worst = Float()
+        perimeter_mean = Float32()
+        perimeter_se = Float32()
+        perimeter_worst = Float32()
 
-        area_mean = Float()
-        area_se = Float()
-        area_worst = Float()
+        area_mean = Float32()
+        area_se = Float32()
+        area_worst = Float32()
 
-        smoothness_mean = Float()
-        smoothness_se = Float()
-        smoothness_worst = Float()
+        smoothness_mean = Float32()
+        smoothness_se = Float32()
+        smoothness_worst = Float32()
 
-        compactness_mean = Float()
-        compactness_se = Float()
-        compactness_worst = Float()
+        compactness_mean = Float32()
+        compactness_se = Float32()
+        compactness_worst = Float32()
 
-        concavity_mean = Float()
-        concavity_se = Float()
-        concavity_worst = Float()
+        concavity_mean = Float32()
+        concavity_se = Float32()
+        concavity_worst = Float32()
 
-        concave_points_mean = Float()
-        concave_points_se = Float()
-        concave_points_worst = Float()
+        concave_points_mean = Float32()
+        concave_points_se = Float32()
+        concave_points_worst = Float32()
 
-        symmetry_mean = Float()
-        symmetry_se = Float()
-        symmetry_worst = Float()
+        symmetry_mean = Float32()
+        symmetry_se = Float32()
+        symmetry_worst = Float32()
 
-        fractal_dimension_mean = Float()
-        fractal_dimension_se = Float()
-        fractal_dimension_worst = Float()
+        fractal_dimension_mean = Float32()
+        fractal_dimension_se = Float32()
+        fractal_dimension_worst = Float32()
 
     return BreastDiagnoseFeatureView
 
@@ -238,45 +233,45 @@ def breast_scan_feature_view_with_datetime(scan_with_datetime: CsvFileSource) ->
         diagnosis = String().description('The given diagnose. M for malignant, and B for benigne')
         is_malignant = (diagnosis == 'M').description('If the scanned cells was diagnosed as dangerous')
 
-        radius_mean = Float()
-        radius_se = Float()
-        radius_worst = Float()
+        radius_mean = Float32()
+        radius_se = Float32()
+        radius_worst = Float32()
 
-        texture_mean = Float()
-        texture_se = Float()
-        texture_worst = Float()
+        texture_mean = Float32()
+        texture_se = Float32()
+        texture_worst = Float32()
 
-        perimeter_mean = Float()
-        perimeter_se = Float()
-        perimeter_worst = Float()
+        perimeter_mean = Float32()
+        perimeter_se = Float32()
+        perimeter_worst = Float32()
 
-        area_mean = Float()
-        area_se = Float()
-        area_worst = Float()
+        area_mean = Float32()
+        area_se = Float32()
+        area_worst = Float32()
 
-        smoothness_mean = Float()
-        smoothness_se = Float()
-        smoothness_worst = Float()
+        smoothness_mean = Float32()
+        smoothness_se = Float32()
+        smoothness_worst = Float32()
 
-        compactness_mean = Float()
-        compactness_se = Float()
-        compactness_worst = Float()
+        compactness_mean = Float32()
+        compactness_se = Float32()
+        compactness_worst = Float32()
 
-        concavity_mean = Float()
-        concavity_se = Float()
-        concavity_worst = Float()
+        concavity_mean = Float32()
+        concavity_se = Float32()
+        concavity_worst = Float32()
 
-        concave_points_mean = Float()
-        concave_points_se = Float()
-        concave_points_worst = Float()
+        concave_points_mean = Float32()
+        concave_points_se = Float32()
+        concave_points_worst = Float32()
 
-        symmetry_mean = Float()
-        symmetry_se = Float()
-        symmetry_worst = Float()
+        symmetry_mean = Float32()
+        symmetry_se = Float32()
+        symmetry_worst = Float32()
 
-        fractal_dimension_mean = Float()
-        fractal_dimension_se = Float()
-        fractal_dimension_worst = Float()
+        fractal_dimension_mean = Float32()
+        fractal_dimension_se = Float32()
+        fractal_dimension_worst = Float32()
 
     return BreastDiagnoseFeatureView
 
@@ -299,45 +294,45 @@ def breast_scan_feature_view_with_datetime_and_aggregation(
         diagnosis = String().description('The given diagnose. M for malignant, and B for benigne')
         is_malignant = (diagnosis == 'M').description('If the scanned cells was diagnosed as dangerous')
 
-        radius_mean = Float()
-        radius_se = Float()
-        radius_worst = Float()
+        radius_mean = Float32()
+        radius_se = Float32()
+        radius_worst = Float32()
 
-        texture_mean = Float()
-        texture_se = Float()
-        texture_worst = Float()
+        texture_mean = Float32()
+        texture_se = Float32()
+        texture_worst = Float32()
 
-        perimeter_mean = Float()
-        perimeter_se = Float()
-        perimeter_worst = Float()
+        perimeter_mean = Float32()
+        perimeter_se = Float32()
+        perimeter_worst = Float32()
 
-        area_mean = Float()
-        area_se = Float()
-        area_worst = Float()
+        area_mean = Float32()
+        area_se = Float32()
+        area_worst = Float32()
 
-        smoothness_mean = Float()
-        smoothness_se = Float()
-        smoothness_worst = Float()
+        smoothness_mean = Float32()
+        smoothness_se = Float32()
+        smoothness_worst = Float32()
 
-        compactness_mean = Float()
-        compactness_se = Float()
-        compactness_worst = Float()
+        compactness_mean = Float32()
+        compactness_se = Float32()
+        compactness_worst = Float32()
 
-        concavity_mean = Float()
-        concavity_se = Float()
-        concavity_worst = Float()
+        concavity_mean = Float32()
+        concavity_se = Float32()
+        concavity_worst = Float32()
 
-        concave_points_mean = Float()
-        concave_points_se = Float()
-        concave_points_worst = Float()
+        concave_points_mean = Float32()
+        concave_points_se = Float32()
+        concave_points_worst = Float32()
 
-        symmetry_mean = Float()
-        symmetry_se = Float()
-        symmetry_worst = Float()
+        symmetry_mean = Float32()
+        symmetry_se = Float32()
+        symmetry_worst = Float32()
 
-        fractal_dimension_mean = Float()
-        fractal_dimension_se = Float()
-        fractal_dimension_worst = Float()
+        fractal_dimension_mean = Float32()
+        fractal_dimension_se = Float32()
+        fractal_dimension_worst = Float32()
 
     return BreastDiagnoseFeatureView
 
@@ -404,7 +399,7 @@ def titanic_feature_view(titanic_source: CsvFileSource) -> FeatureViewWrapper:
         passenger_id = Int32().as_entity()
 
         # Input values
-        age = Float().lower_bound(0).upper_bound(100).description('A float as some have decimals')
+        age = Float32().lower_bound(0).upper_bound(100).description('A float as some have decimals')
 
         name = String().is_optional()
         sex = String().is_optional().accepted_values(['male', 'female'])
@@ -460,7 +455,11 @@ def titanic_feature_view_parquet(titanic_source_parquet: ParquetFileSource) -> F
 
         # Input values
         age = (
-            Float().is_required().lower_bound(0).upper_bound(100).description('A float as some have decimals')
+            Float32()
+            .is_required()
+            .lower_bound(0)
+            .upper_bound(100)
+            .description('A float as some have decimals')
         )
 
         name = String()
@@ -500,7 +499,7 @@ def alot_of_transforations_feature_view(titanic_source: CsvFileSource) -> Featur
         passenger_id = Int32().as_entity()
 
         # Input values
-        age = Float()
+        age = Float32()
         name = String()
         sex = String()
         survived = Bool()
@@ -563,7 +562,11 @@ def titanic_feature_view_scd(titanic_source_scd: CsvFileSource) -> FeatureViewWr
 
         # Input values
         age = (
-            Float().is_required().lower_bound(0).upper_bound(100).description('A float as some have decimals')
+            Float32()
+            .is_required()
+            .lower_bound(0)
+            .upper_bound(100)
+            .description('A float as some have decimals')
         )
         updated_at = EventTimestamp()
 
@@ -648,7 +651,7 @@ def point_in_time_data_test() -> DataTest:
 
     placeholder_ds = FileSource.parquet_at('placeholder')
 
-    @feature_view(name='credit_history', description='', source=placeholder_ds)
+    @feature_view(name='credit_history', source=placeholder_ds)
     class CreditHistory:
 
         dob_ssn = String().as_entity()
@@ -660,7 +663,7 @@ def point_in_time_data_test() -> DataTest:
 
         bankruptcies = Int32()
 
-    @feature_view(name='credit_history_agg', description='', source=placeholder_ds)
+    @feature_view(name='credit_history_agg', source=placeholder_ds)
     class CreditHistoryAggregate:
         dob_ssn = String().as_entity()
         event_timestamp = EventTimestamp()
@@ -668,7 +671,7 @@ def point_in_time_data_test() -> DataTest:
 
         credit_sum = credit_card_due.aggregate().over(weeks=1).sum()
 
-    @feature_view(name='loan', description='', source=placeholder_ds)
+    @feature_view(name='loan', source=placeholder_ds)
     class Loan:
 
         loan_id = Int32().as_entity()

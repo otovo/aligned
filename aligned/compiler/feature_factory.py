@@ -191,7 +191,7 @@ class RecommendationTarget(FeatureReferencable):
             raise ValueError('Missing name, can not create reference')
         if not self._location:
             raise ValueError('Missing location, can not create reference')
-        return FeatureReference(self._name, self._location, self.feature.dtype)
+        return FeatureReference(self._name, self._location)
 
     def estemating_rank(self, feature: FeatureFactory) -> RecommendationTarget:
         self.rank_feature = feature
@@ -223,7 +223,7 @@ class RegressionLabel(FeatureReferencable):
             raise ValueError('Missing name, can not create reference')
         if not self._location:
             raise ValueError('Missing location, can not create reference')
-        return FeatureReference(self._name, self._location, self.feature.dtype)
+        return FeatureReference(self._name, self._location)
 
     def listen_to_ground_truth_event(self, stream: StreamDataSource) -> RegressionLabel:
         return RegressionLabel(
@@ -422,7 +422,7 @@ class FeatureFactory(FeatureReferencable):
                 f'_location is not set for {self.name}. '
                 'Therefore, making it impossible to create a referance.'
             )
-        return FeatureReference(self.name, self._location, self.dtype)
+        return FeatureReference(self.name, self._location)
 
     def with_tag(self: T, key: str) -> T:
         if self.tags is None:
@@ -463,6 +463,13 @@ class FeatureFactory(FeatureReferencable):
 
     def as_annotated_by(self: T) -> T:
         return self.with_tag(StaticFeatureTags.is_annotated_by)
+
+    def as_annotated_feature(self: T, using: list[FeatureReferencable] | None = None) -> T:
+        refs = ','.join([ref.feature_reference().identifier for ref in using or []])
+        if refs:
+            return self.with_tag(f"{StaticFeatureTags.is_annotated_feature}-{refs}")
+        else:
+            return self.with_tag(StaticFeatureTags.is_annotated_feature)
 
     def compile(self) -> DerivedFeature:
 
@@ -641,7 +648,7 @@ class FeatureFactory(FeatureReferencable):
         from aligned.compiler.transformation_factory import LoadFeature
 
         new = self.copy_type()
-        new.transformation = LoadFeature(entities, self.feature_reference())
+        new.transformation = LoadFeature(entities, self.feature_reference(), self.dtype)
         new._loads_feature = self.feature_reference()
         return new
 
@@ -729,44 +736,44 @@ class ComparableFeature(EquatableFeature):
 
 
 class ArithmeticFeature(ComparableFeature):
-    def __sub__(self, other: FeatureFactory | Any) -> Float:
+    def __sub__(self, other: FeatureFactory | Any) -> Float32:
         from aligned.compiler.transformation_factory import DifferanceBetweenFactory, TimeDifferanceFactory
 
-        feature = Float()
+        feature = Float32()
         if self.dtype == FeatureType.datetime():
             feature.transformation = TimeDifferanceFactory(self, other)
         else:
             feature.transformation = DifferanceBetweenFactory(self, other)
         return feature
 
-    def __radd__(self, other: FeatureFactory | Any) -> Float:
+    def __radd__(self, other: FeatureFactory | Any) -> Float32:
         from aligned.compiler.transformation_factory import AdditionBetweenFactory
 
-        feature = Float()
+        feature = Float32()
         feature.transformation = AdditionBetweenFactory(self, other)
         return feature
 
-    def __add__(self, other: FeatureFactory | Any) -> Float:
+    def __add__(self, other: FeatureFactory | Any) -> Float32:
         from aligned.compiler.transformation_factory import AdditionBetweenFactory
 
-        feature = Float()
+        feature = Float32()
         feature.transformation = AdditionBetweenFactory(self, other)
         return feature
 
-    def __truediv__(self, other: FeatureFactory | Any) -> Float:
+    def __truediv__(self, other: FeatureFactory | Any) -> Float32:
         from aligned.compiler.transformation_factory import RatioFactory
 
-        feature = Float()
+        feature = Float32()
         if isinstance(other, FeatureFactory):
             feature.transformation = RatioFactory(self, other)
         else:
             feature.transformation = RatioFactory(self, LiteralValue.from_value(other))
         return feature
 
-    def __floordiv__(self, other: FeatureFactory | Any) -> Float:
+    def __floordiv__(self, other: FeatureFactory | Any) -> Float32:
         from aligned.compiler.transformation_factory import RatioFactory
 
-        feature = Float()
+        feature = Float32()
         if isinstance(other, FeatureFactory):
             feature.transformation = RatioFactory(self, other)
         else:
@@ -780,37 +787,37 @@ class ArithmeticFeature(ComparableFeature):
         feature.transformation = AbsoluteFactory(self)
         return feature
 
-    def __mul__(self, other: FeatureFactory | Any) -> Float:
+    def __mul__(self, other: FeatureFactory | Any) -> Float32:
         from aligned.compiler.transformation_factory import MultiplyFactory
 
-        feature = Float()
+        feature = Float32()
         if isinstance(other, FeatureFactory):
             feature.transformation = MultiplyFactory(self, other)
         else:
             feature.transformation = MultiplyFactory(self, LiteralValue.from_value(other))
         return feature
 
-    def __rmul__(self, other: FeatureFactory | Any) -> Float:
+    def __rmul__(self, other: FeatureFactory | Any) -> Float32:
         from aligned.compiler.transformation_factory import MultiplyFactory
 
-        feature = Float()
+        feature = Float32()
         if isinstance(other, FeatureFactory):
             feature.transformation = MultiplyFactory(self, other)
         else:
             feature.transformation = MultiplyFactory(self, LiteralValue.from_value(other))
         return feature
 
-    def __pow__(self, other: FeatureFactory | Any) -> Float:
+    def __pow__(self, other: FeatureFactory | Any) -> Float32:
         from aligned.compiler.transformation_factory import PowerFactory
 
-        feature = Float()
+        feature = Float32()
         feature.transformation = PowerFactory(self, other)
         return feature
 
-    def log1p(self) -> Float:
+    def log1p(self) -> Float32:
         from aligned.compiler.transformation_factory import LogTransformFactory
 
-        feature = Float()
+        feature = Float32()
         feature.transformation = LogTransformFactory(self)
         return feature
 
@@ -860,17 +867,17 @@ class TruncatableFeature(FeatureFactory):
 
 
 class NumberConvertableFeature(FeatureFactory):
-    def as_float(self) -> Float:
+    def as_float(self) -> Float32:
         from aligned.compiler.transformation_factory import ToNumericalFactory
 
-        feature = Float()
+        feature = Float32()
         feature.transformation = ToNumericalFactory(self)
         return feature
 
     def __int__(self) -> Int64:
         raise NotImplementedError()
 
-    def __float__(self) -> Float:
+    def __float__(self) -> Float32:
         raise NotImplementedError()
 
 
@@ -975,14 +982,42 @@ class Bool(EquatableFeature, LogicalOperatableFeature, CanBeClassificationLabel)
 
 
 class Float(ArithmeticFeature, DecimalOperations):
-    def copy_type(self) -> Float:
+    def copy_type(self) -> Float32:
         if self.constraints and Optional() in self.constraints:
-            return Float().is_optional()
-        return Float()
+            return Float32().is_optional()
+        return Float32()
 
     @property
     def dtype(self) -> FeatureType:
-        return FeatureType.floating_point()
+        return FeatureType.float32()
+
+    def aggregate(self) -> ArithmeticAggregation:
+        return ArithmeticAggregation(self)
+
+
+class Float32(ArithmeticFeature, DecimalOperations):
+    def copy_type(self) -> Float32:
+        if self.constraints and Optional() in self.constraints:
+            return Float32().is_optional()
+        return Float32()
+
+    @property
+    def dtype(self) -> FeatureType:
+        return FeatureType.float32()
+
+    def aggregate(self) -> ArithmeticAggregation:
+        return ArithmeticAggregation(self)
+
+
+class Float64(ArithmeticFeature, DecimalOperations):
+    def copy_type(self) -> Float64:
+        if self.constraints and Optional() in self.constraints:
+            return Float64().is_optional()
+        return Float64()
+
+    @property
+    def dtype(self) -> FeatureType:
+        return FeatureType.float64()
 
     def aggregate(self) -> ArithmeticAggregation:
         return ArithmeticAggregation(self)
@@ -1299,6 +1334,33 @@ class String(
         return image_url
 
 
+@dataclass
+class Struct(FeatureFactory):
+
+    subtype: Any
+
+    def copy_type(self: Struct) -> Struct:
+        if self.constraints and Optional() in self.constraints:
+            return Struct(self.subtype).is_optional()
+        return Struct(self.subtype)
+
+    def as_input_features(self) -> Struct:
+        return self.with_tag(StaticFeatureTags.is_input_features)
+
+    @property
+    def dtype(self) -> FeatureType:
+        dtype = FeatureType.from_type(self.subtype)
+        assert dtype, f"Was unable to find type for {self.subtype}"
+        return dtype
+
+    def field(self, field: str, as_type: T) -> T:
+        from aligned.compiler.transformation_factory import StructFieldFactory
+
+        feature = as_type.copy_type()
+        feature.transformation = StructFieldFactory(self, field)
+        return feature
+
+
 class Json(FeatureFactory):
     def copy_type(self: Json) -> Json:
         if self.constraints and Optional() in self.constraints:
@@ -1340,6 +1402,12 @@ class ModelVersion(FeatureFactory):
 
     def aggregate(self) -> CategoricalAggregation:
         return CategoricalAggregation(self)
+
+
+class Date(DateFeature, ArithmeticFeature):
+    @property
+    def dtype(self) -> FeatureType:
+        return FeatureType.date()
 
 
 class Timestamp(DateFeature, ArithmeticFeature):
@@ -1391,7 +1459,7 @@ class Embedding(FeatureFactory):
 
     embedding_size: int
     indexes: list[VectorIndexFactory] | None = None
-    sub_type: FeatureFactory = field(default_factory=Float)
+    sub_type: FeatureFactory = field(default_factory=Float32)
 
     def copy_type(self) -> Embedding:
         if self.constraints and Optional() in self.constraints:
@@ -1403,7 +1471,7 @@ class Embedding(FeatureFactory):
     def dtype(self) -> FeatureType:
         return FeatureType.embedding(self.embedding_size or 0)
 
-    def dot_product(self, embedding: Embedding, check_embedding_size: bool = True) -> Float:
+    def dot_product(self, embedding: Embedding, check_embedding_size: bool = True) -> Float32:
         from aligned.compiler.transformation_factory import ListDotProduct
 
         if check_embedding_size:
@@ -1412,7 +1480,7 @@ class Embedding(FeatureFactory):
                 f"Left: {self.embedding_size}, right: {embedding.embedding_size}"
             )
 
-        feat = Float()
+        feat = Float32()
         feat.transformation = ListDotProduct(self, embedding)
         return feat
 
@@ -1543,7 +1611,7 @@ class Coordinate:
     x: ArithmeticFeature
     y: ArithmeticFeature
 
-    def eucledian_distance(self, to: Coordinate) -> Float:
+    def eucledian_distance(self, to: Coordinate) -> Float32:
         sub = self.x - to.x
         return (sub**2 + (self.y - to.y) ** 2) ** 0.5
 
@@ -1729,10 +1797,10 @@ class ArithmeticAggregation:
         )
         return ArithmeticAggregation(self.feature, self.time_window, self.every_interval, offset_interval)
 
-    def sum(self) -> Float:
+    def sum(self) -> Float32:
         from aligned.compiler.aggregation_factory import SumAggregationFactory
 
-        feat = Float()
+        feat = Float32()
         feat.transformation = SumAggregationFactory(
             self.feature,
             time_window=self.time_window,
@@ -1741,10 +1809,10 @@ class ArithmeticAggregation:
         )
         return feat
 
-    def mean(self) -> Float:
+    def mean(self) -> Float32:
         from aligned.compiler.aggregation_factory import MeanAggregationFactory
 
-        feat = Float()
+        feat = Float32()
         feat.transformation = MeanAggregationFactory(
             self.feature,
             time_window=self.time_window,
@@ -1753,10 +1821,10 @@ class ArithmeticAggregation:
         )
         return feat
 
-    def min(self) -> Float:
+    def min(self) -> Float32:
         from aligned.compiler.aggregation_factory import MinAggregationFactory
 
-        feat = Float()
+        feat = Float32()
         feat.transformation = MinAggregationFactory(
             self.feature,
             time_window=self.time_window,
@@ -1765,10 +1833,10 @@ class ArithmeticAggregation:
         )
         return feat
 
-    def max(self) -> Float:
+    def max(self) -> Float32:
         from aligned.compiler.aggregation_factory import MaxAggregationFactory
 
-        feat = Float()
+        feat = Float32()
         feat.transformation = MaxAggregationFactory(
             self.feature,
             time_window=self.time_window,
@@ -1801,10 +1869,10 @@ class ArithmeticAggregation:
         )
         return feat
 
-    def std(self) -> Float:
+    def std(self) -> Float32:
         from aligned.compiler.aggregation_factory import StdAggregationFactory
 
-        feat = Float()
+        feat = Float32()
         feat.transformation = StdAggregationFactory(
             self.feature,
             time_window=self.time_window,
@@ -1813,10 +1881,10 @@ class ArithmeticAggregation:
         )
         return feat
 
-    def variance(self) -> Float:
+    def variance(self) -> Float32:
         from aligned.compiler.aggregation_factory import VarianceAggregationFactory
 
-        feat = Float()
+        feat = Float32()
         feat.transformation = VarianceAggregationFactory(
             self.feature,
             time_window=self.time_window,
@@ -1825,10 +1893,10 @@ class ArithmeticAggregation:
         )
         return feat
 
-    def median(self) -> Float:
+    def median(self) -> Float32:
         from aligned.compiler.aggregation_factory import MedianAggregationFactory
 
-        feat = Float()
+        feat = Float32()
         feat.transformation = MedianAggregationFactory(
             self.feature,
             time_window=self.time_window,
@@ -1837,10 +1905,10 @@ class ArithmeticAggregation:
         )
         return feat
 
-    def percentile(self, percentile: float) -> Float:
+    def percentile(self, percentile: float) -> Float32:
         from aligned.compiler.aggregation_factory import PercentileAggregationFactory
 
-        feat = Float()
+        feat = Float32()
         feat.transformation = PercentileAggregationFactory(
             self.feature,
             percentile=percentile,
